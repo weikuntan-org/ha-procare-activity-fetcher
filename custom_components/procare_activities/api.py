@@ -1,4 +1,5 @@
 """API Client for Procare Connect."""
+import asyncio
 import logging
 from datetime import datetime, date, timedelta
 import aiohttp
@@ -98,20 +99,35 @@ class ProcareApi:
         # Post credentials to the authentication API endpoint.
         payload = {"email": self._username, "password": self._password, "role": "carer", "platform": "web"}
         
-        async with self._session.post(
-            f"{self._auth_host}/sessions/", json=payload, headers=self._headers
-        ) as resp:
-            if resp.status not in (200, 201):
-                raise ProcareAuthError(f"Auth failed with status:  {resp.status}")
+        try:
+            async with self._session.post(
+                f"{self._auth_host}/sessions/", json=payload, headers=self._headers
+            ) as resp:
+                if resp.status in (401, 403):
+                    raise ProcareAuthError(f"Invalid credentials (HTTP {resp.status})")
+                if resp.status == 429:
+                    raise ProcareApiError("Rate limited by Procare auth service.")
+                if resp.status >= 500:
+                    raise ProcareApiError(f"Procare auth server error (HTTP {resp.status}).")
+                if resp.status not in (200, 201):
+                    raise ProcareAuthError(f"Auth failed with status: {resp.status}")
 
-            data = await resp.json()
-            token = data.get("auth_token")
-            
-            if not token:
-                raise ProcareAuthError("token not found in login response.")
-            
-            self._auth_token = token
-            _LOGGER.info("Successfully logged in.")
+                try:
+                    data = await resp.json()
+                except (aiohttp.ContentTypeError, ValueError) as err:
+                    raise ProcareApiError("Unexpected response format from auth service.") from err
+
+                token = data.get("auth_token")
+                
+                if not token:
+                    raise ProcareAuthError("token not found in login response.")
+                
+                self._auth_token = token
+                _LOGGER.info("Successfully logged in.")
+        except (aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError) as err:
+            raise ProcareApiError(f"Cannot connect to Procare auth service: {err}") from err
+        except asyncio.TimeoutError as err:
+            raise ProcareApiError("Request to Procare auth service timed out.") from err
 
     def _get_auth_headers(self):
         if not self._auth_token:
@@ -121,49 +137,67 @@ class ProcareApi:
         headers["Authorization"] = f"Bearer {self._auth_token}"
         return headers
 
-    async def async_get_kids(self) -> list[dict]:
-        ''' Get kids for account'''
+    async def _request_with_reauth(self, method: str, url: str, **kwargs) -> dict:
+        """Make an authenticated API request, retrying once after re-authentication on 401/403."""
+        # Ensure we have a token before the first attempt. async_login() is a
+        # no-op when self._auth_token is already set, so this is not wasteful.
         await self.async_login()
-        async with self._session.get(
-            f"{self._api_host}/api/web/parent/kids/", headers=self._get_auth_headers()
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            kids = data.get("kids", [])
-            if not kids:
-                raise ProcareNoChildrenError("No children found for this account.")
-            return [{"name": f"{k.get('first_name', '')} {k.get('last_name', '')}".strip(), "id": k.get("id")} for k in kids]
+        for attempt in range(2):
+            try:
+                async with self._session.request(
+                    method, url, headers=self._get_auth_headers(), **kwargs
+                ) as resp:
+                    if resp.status in (401, 403) and attempt == 0:
+                        _LOGGER.warning("Token expired (HTTP %s), re-authenticating.", resp.status)
+                        self._auth_token = None
+                        await self.async_login()
+                        continue
+                    if resp.status in (401, 403):
+                        raise ProcareAuthError("Re-authentication failed.")
+                    if resp.status == 429:
+                        _LOGGER.warning("Rate limited by Procare API (HTTP 429).")
+                        raise ProcareApiError("Rate limited by Procare API.")
+                    if resp.status >= 500:
+                        _LOGGER.warning("Procare server error (HTTP %s).", resp.status)
+                        raise ProcareApiError(f"Procare server error (HTTP {resp.status}).")
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except (aiohttp.ContentTypeError, ValueError) as err:
+                        raise ProcareApiError("Unexpected response format from Procare API.") from err
+            except (aiohttp.ClientConnectionError, aiohttp.ServerTimeoutError) as err:
+                raise ProcareApiError(f"Cannot connect to Procare API: {err}") from err
+            except asyncio.TimeoutError as err:
+                raise ProcareApiError("Request to Procare API timed out.") from err
+            except aiohttp.ClientResponseError as err:
+                raise ProcareApiError(f"Request failed with status {err.status}.") from err
+
+    async def async_get_kids(self) -> list[dict]:
+        """Get kids for account."""
+        data = await self._request_with_reauth("GET", f"{self._api_host}/api/web/parent/kids/")
+        kids = data.get("kids", [])
+        if not kids:
+            raise ProcareNoChildrenError("No children found for this account.")
+        return [{"name": f"{k.get('first_name', '')} {k.get('last_name', '')}".strip(), "id": k.get("id")} for k in kids]
 
     async def async_get_activities(self, kid_id: str) -> list[dict]:
         """Fetch latest activities for a specific child from the last 7 days."""
-        await self.async_login()
-        
         today = date.today()
         seven_days_ago = today - timedelta(days=7)
-        
+
         params = {
             "kid_id": kid_id,
             "filters[daily_activity][date_from]": seven_days_ago.strftime("%Y-%m-%d"),
             "filters[daily_activity][date_to]": today.strftime("%Y-%m-%d"),
-            "page": "1"
+            "page": "1",
         }
-        
-        try:
-            async with self._session.get(
-                f"{self._api_host}/api/web/parent/daily_activities/",
-                headers=self._get_auth_headers(),
-                params=params,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                raw_activities = data.get("daily_activities", [])
-                return self._parse_activities(raw_activities)
 
-        except aiohttp.ClientResponseError as err:
-            if err.status in (401, 403):
-                self._auth_token = None
-                raise ProcareAuthError("Token expired, will re-authenticate.") from err
-            raise ProcareApiError(f"Failed to fetch activities: {err.status}") from err
+        data = await self._request_with_reauth(
+            "GET",
+            f"{self._api_host}/api/web/parent/daily_activities/",
+            params=params,
+        )
+        return self._parse_activities(data.get("daily_activities", []))
 
     def _parse_activities(self, raw_activities: list[dict]) -> list[dict]:
         """Parses the raw API activity data into a clean format."""
