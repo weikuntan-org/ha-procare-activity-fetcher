@@ -225,9 +225,6 @@ class ProcareApi:
                             f"Slept from {start_dt.strftime('%-I:%M %p')} "
                             f"to {end_dt.strftime('%-I:%M %p')}"
                         )
-                    elif end_time_str:
-                        end_dt = datetime.fromisoformat(end_time_str)
-                        title = f"Nap Ended at {end_dt.strftime('%-I:%M %p')}"
                     elif start_time_str:
                         start_dt = datetime.fromisoformat(start_time_str)
                         title = f"Nap Started at {start_dt.strftime('%-I:%M %p')}"
