@@ -221,19 +221,9 @@ class ProcareApi:
                     start_time_str = data.get('start_time')
                     end_time_str = data.get('end_time')
                     if end_time_str and start_time_str:
-                        start_dt = datetime.fromisoformat(start_time_str)
-                        end_dt = datetime.fromisoformat(end_time_str)
-                        total_minutes = int((end_dt - start_dt).total_seconds() // 60)
-                        hours, minutes = divmod(total_minutes, 60)
-                        if hours and minutes:
-                            duration = f"{hours}h {minutes}m"
-                        elif hours:
-                            duration = f"{hours}h"
-                        else:
-                            duration = f"{minutes}m"
                         title = (
-                            f"Nap from {start_dt.strftime('%-I:%M %p')} "
-                            f"to {end_dt.strftime('%-I:%M %p')} ({duration})"
+                            f"Slept from {start_dt.strftime('%-I:%M %p')} "
+                            f"to {end_dt.strftime('%-I:%M %p')}"
                         )
                     elif end_time_str:
                         end_dt = datetime.fromisoformat(end_time_str)
