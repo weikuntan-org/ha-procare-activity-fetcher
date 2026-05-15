@@ -209,6 +209,9 @@ class ProcareApi:
                 details = act.get("comment", "") or ""
                 data = act.get("data", {})
 
+                if activity_type in ("nap", "bottle") or "bottle" in (act.get("activity_type") or "") or "nap" in (act.get("activity_type") or ""):
+                    _LOGGER.debug("Raw %s activity record: %s", activity_type, act)
+
                 if activity_type in ("sign_in", "sign_out"):
                     activiable = act.get("activiable", {})
                     signed_by = activiable.get(f"signed_{activity_type}_by", "Unknown")
