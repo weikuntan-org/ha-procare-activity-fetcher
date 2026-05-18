@@ -217,9 +217,28 @@ class ProcareApi:
                 elif activity_type == "meal" and data:
                     title = f"Meal: {data.get('type', 'Meal')}"
                     details = f"{data.get('desc', '')} ({data.get('quantity', '')})".strip()
-                elif activity_type == "nap" and data and data.get('start_time'):
-                    start_time = datetime.fromisoformat(data['start_time']).strftime("%-I:%M %p")
-                    title = f"Nap Started at {start_time}"
+                elif activity_type == "nap" and data:
+                    start_time_str = data.get('start_time')
+                    end_time_str = data.get('end_time')
+                    if end_time_str and start_time_str:
+                        start_dt = datetime.fromisoformat(start_time_str)
+                        end_dt = datetime.fromisoformat(end_time_str)
+                        title = (
+                            f"Slept from {start_dt.strftime('%-I:%M %p')} "
+                            f"to {end_dt.strftime('%-I:%M %p')}"
+                        )
+                    elif start_time_str:
+                        start_dt = datetime.fromisoformat(start_time_str)
+                        title = f"Nap Started at {start_dt.strftime('%-I:%M %p')}"
+                elif activity_type == "bottle" and data:
+                    amount = data.get('amount')
+                    if amount not in (None, ""):
+                        title = f"Bottle: {amount} oz"
+                    else:
+                        title = "Bottle"
+                    desc = data.get('desc')
+                    if desc:
+                        details = desc
                 elif activity_type == "bathroom" and data:
                     title = f"Diaper: {data.get('sub_type', 'check')}"
 
