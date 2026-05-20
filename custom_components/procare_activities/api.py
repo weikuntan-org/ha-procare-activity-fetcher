@@ -241,6 +241,15 @@ class ProcareApi:
                         details = desc
                 elif activity_type == "bathroom" and data:
                     title = f"Diaper: {data.get('sub_type', 'check')}"
+                    extras = []
+                    size = (data.get('diaper_size') or "").strip()
+                    if size:
+                        extras.append(f"size {size}")
+                    if data.get('diaper_cream'):
+                        extras.append("cream applied")
+                    if extras:
+                        suffix = ", ".join(extras)
+                        details = f"{details} ({suffix})" if details else suffix
 
                 parsed.append({
                     "id": act.get("id"),
