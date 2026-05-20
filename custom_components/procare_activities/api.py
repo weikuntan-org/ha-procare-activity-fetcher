@@ -246,7 +246,7 @@ class ProcareApi:
                     if size:
                         extras.append(f"size {size}")
                     if data.get('diaper_cream'):
-                        extras.append("cream applied")
+                        extras.append("diaper cream applied")
                     if extras:
                         suffix = ", ".join(extras)
                         details = f"{details} ({suffix})" if details else suffix
