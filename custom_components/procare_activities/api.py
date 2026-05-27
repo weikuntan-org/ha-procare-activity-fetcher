@@ -199,8 +199,60 @@ class ProcareApi:
         )
         return self._parse_activities(data.get("daily_activities", []))
 
+    def _merge_nap_pairs(self, raw_activities: list[dict]) -> list[dict]:
+        """Merge nap start/end pairs posted as two records into one.
+
+        The daycare app sometimes edits the original nap record to add end_time
+        (single record, both times populated) and sometimes posts a second
+        record with only end_time set. We pair each end-only nap with its most
+        recent prior start-only nap for the same kid_ids, drop the start
+        record, and inject its start_time into the end record so downstream
+        formatting sees a single complete nap.
+        """
+        naps_asc = sorted(
+            [a for a in raw_activities if a.get("activity_type") == "nap_activity"],
+            key=lambda a: a.get("activity_time") or "",
+        )
+        pending: dict[tuple, dict] = {}  # kid_ids -> start-only record
+        drop_ids: set = set()
+        start_overrides: dict = {}  # end-record id -> start_time to inject
+
+        for act in naps_asc:
+            data = act.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            start = data.get("start_time") or ""
+            end = data.get("end_time") or ""
+            key = tuple(act.get("kid_ids") or [])
+            if start and end:
+                # Already-merged record; clear any unmatched pending start.
+                pending.pop(key, None)
+            elif start:
+                pending[key] = act
+            elif end:
+                partner = pending.pop(key, None)
+                if partner is not None:
+                    drop_ids.add(partner.get("id"))
+                    start_overrides[act.get("id")] = (partner.get("data") or {}).get("start_time", "")
+
+        if not drop_ids and not start_overrides:
+            return raw_activities
+
+        merged = []
+        for act in raw_activities:
+            aid = act.get("id")
+            if aid in drop_ids:
+                continue
+            if aid in start_overrides:
+                new_data = {**(act.get("data") or {}), "start_time": start_overrides[aid]}
+                merged.append({**act, "data": new_data})
+            else:
+                merged.append(act)
+        return merged
+
     def _parse_activities(self, raw_activities: list[dict]) -> list[dict]:
         """Parses the raw API activity data into a clean format."""
+        raw_activities = self._merge_nap_pairs(raw_activities)
         parsed = []
         for act in sorted(raw_activities, key=lambda x: x.get("activity_time", ""), reverse=True):
             try:
@@ -230,6 +282,9 @@ class ProcareApi:
                     elif start_time_str:
                         start_dt = datetime.fromisoformat(start_time_str)
                         title = f"Nap Started at {start_dt.strftime('%-I:%M %p')}"
+                    elif end_time_str:
+                        end_dt = datetime.fromisoformat(end_time_str)
+                        title = f"Nap Ended at {end_dt.strftime('%-I:%M %p')}"
                 elif activity_type == "bottle" and data:
                     amount = data.get('amount')
                     if amount not in (None, ""):
