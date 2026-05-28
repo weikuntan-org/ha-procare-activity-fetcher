@@ -148,7 +148,8 @@ export class ProcareTimelineCardEditor extends LitElement {
       ],
       displaySchema: [
         { name: "group_by_day", description: "Group activities under per-day headers.", selector: { boolean: {} } },
-        { name: "show_summaries", description: "Show per-day summary chips (diapers, sleep, meals, bottles). Requires Group by Day.", selector: { boolean: {} } },
+        { name: "paginate_by_day", description: "Show one day at a time with ◀ ▶ arrows. Takes precedence over Group by Day.", selector: { boolean: {} } },
+        { name: "show_summaries", description: "Show per-day summary chips (diapers, sleep, meals, bottles). Requires grouping or pagination.", selector: { boolean: {} } },
       ],
       dateFormatSchema: [
         {
@@ -175,6 +176,7 @@ export class ProcareTimelineCardEditor extends LitElement {
       number_of_events: "Number of Events",
       date_format: "Date Format",
       group_by_day: "Group by Day",
+      paginate_by_day: "Paginate by Day",
       show_summaries: "Show Day Summaries",
     };
     return labels[schema.name] || schema.name;
@@ -231,8 +233,10 @@ class ProcareTimelineCard extends HTMLElement {
       number_of_events: config.number_of_events || 10,
       date_format: config.date_format || 'monthddyy',
       group_by_day: !!config.group_by_day,
+      paginate_by_day: !!config.paginate_by_day,
       show_summaries: !!config.show_summaries,
     };
+    this._currentDayKey = null;  // resolved on first render
   }
 
   set hass(hass) {
@@ -245,8 +249,13 @@ class ProcareTimelineCard extends HTMLElement {
       return;
     }
 
-    let activities = state.attributes.activities || [];
-    if (!this._config.group_by_day) {
+    this._activities = state.attributes.activities || [];
+    this._rerender();
+  }
+
+  _rerender() {
+    let activities = this._activities || [];
+    if (!this._config.group_by_day && !this._config.paginate_by_day) {
       activities = activities.slice(0, this._config.number_of_events);
     }
     this.render(activities);
@@ -309,7 +318,7 @@ class ProcareTimelineCard extends HTMLElement {
         if (dayKey === today) label = `Today · ${dateLabel}`;
         else if (dayKey === yesterday) label = `Yesterday · ${dateLabel}`;
         else label = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-        groups.set(dayKey, { label, items: [] });
+        groups.set(dayKey, { key: dayKey, label, items: [] });
       }
       groups.get(dayKey).items.push(a);
     }
@@ -459,6 +468,39 @@ class ProcareTimelineCard extends HTMLElement {
             border-bottom: 1px solid var(--divider-color);
           }
           .day-header:first-child { margin-top: 0; }
+          .day-nav {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--divider-color);
+          }
+          .day-nav .day-header {
+            flex: 1;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+            border: none;
+          }
+          .nav-btn {
+            background: var(--secondary-background-color);
+            color: var(--primary-text-color);
+            border: none;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1.3em;
+            line-height: 1;
+            padding: 0;
+            font-family: inherit;
+          }
+          .nav-btn:hover:not(:disabled) { background: var(--divider-color); }
+          .nav-btn:disabled { opacity: 0.3; cursor: default; }
           .chips {
             display: flex;
             flex-wrap: wrap;
@@ -492,7 +534,35 @@ class ProcareTimelineCard extends HTMLElement {
     }
 
     let timelineHtml = '';
-    if (this._config.group_by_day) {
+    if (this._config.paginate_by_day) {
+      const groups = this.groupByDay(activities);
+      // Resolve the day to display. If the stored key no longer exists
+      // (e.g. it aged out of the 7-day window), snap back to the newest.
+      if (!this._currentDayKey || !groups.some(g => g.key === this._currentDayKey)) {
+        this._currentDayKey = groups[0]?.key || null;
+      }
+      const currentIdx = groups.findIndex(g => g.key === this._currentDayKey);
+      const current = groups[currentIdx];
+      if (!current) {
+        container.innerHTML = `<div class="no-activities">No activities to display.</div>`;
+        return;
+      }
+      const hasOlder = currentIdx < groups.length - 1;
+      const hasNewer = currentIdx > 0;
+      timelineHtml += `
+        <div class="day-nav">
+          <button class="nav-btn" data-dir="older" ${hasOlder ? '' : 'disabled'} aria-label="Older day">‹</button>
+          <div class="day-header">${current.label}</div>
+          <button class="nav-btn" data-dir="newer" ${hasNewer ? '' : 'disabled'} aria-label="Newer day">›</button>
+        </div>
+      `;
+      if (this._config.show_summaries) {
+        timelineHtml += this.chipsHtml(this.summarize(current.items));
+      }
+      timelineHtml += '<div class="timeline">';
+      for (const a of current.items) timelineHtml += this.itemHtml(a);
+      timelineHtml += '</div>';
+    } else if (this._config.group_by_day) {
       const groups = this.groupByDay(activities);
       for (const g of groups) {
         timelineHtml += `<div class="day-header">${g.label}</div>`;
@@ -510,6 +580,23 @@ class ProcareTimelineCard extends HTMLElement {
     }
 
     container.innerHTML = timelineHtml;
+
+    if (this._config.paginate_by_day) {
+      container.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.disabled) return;
+          const groups = this.groupByDay(this._activities || []);
+          const idx = groups.findIndex(g => g.key === this._currentDayKey);
+          const dir = btn.dataset.dir;
+          if (dir === 'older' && idx < groups.length - 1) {
+            this._currentDayKey = groups[idx + 1].key;
+          } else if (dir === 'newer' && idx > 0) {
+            this._currentDayKey = groups[idx - 1].key;
+          }
+          this._rerender();
+        });
+      });
+    }
   }
 
   renderError(error) {
