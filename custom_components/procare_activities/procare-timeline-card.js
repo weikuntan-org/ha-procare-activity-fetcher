@@ -381,6 +381,24 @@ class ProcareTimelineCard extends HTMLElement {
     return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
   }
 
+  openMediaModal(url, isVideo) {
+    const modal = this.shadowRoot.getElementById('media-modal');
+    const body = this.shadowRoot.getElementById('media-modal-body');
+    if (!modal || !body) return;
+    body.innerHTML = isVideo
+      ? `<video src="${url}" controls autoplay playsinline></video>`
+      : `<img src="${url}" alt="Activity media">`;
+    modal.classList.add('open');
+  }
+
+  closeMediaModal() {
+    const modal = this.shadowRoot.getElementById('media-modal');
+    const body = this.shadowRoot.getElementById('media-modal-body');
+    if (!modal) return;
+    modal.classList.remove('open');
+    if (body) body.innerHTML = '';
+  }
+
   itemHtml(activity) {
     const icon = this.getIcon(activity.title);
     const time = this._config.group_by_day
@@ -388,21 +406,21 @@ class ProcareTimelineCard extends HTMLElement {
       : this.formatDate(activity.timestamp);
     const title = activity.title || 'Activity';
     const description = activity.details || '';
-    const staff = activity.staff ? `<div class="staff">by ${activity.staff}</div>` : '';
+    const staff = activity.staff ? `<div class="staff truncatable">by ${activity.staff}</div>` : '';
     let media = '';
     if (activity.video_url) {
       const poster = activity.photo_url ? ` poster="${activity.photo_url}"` : '';
-      media = `<video controls playsinline preload="metadata"${poster} src="${activity.video_url}"></video>`;
+      media = `<video class="media" muted playsinline preload="metadata"${poster} src="${activity.video_url}" data-media-url="${activity.video_url}" data-media-video="1"></video>`;
     } else if (activity.photo_url) {
-      media = `<img src="${activity.photo_url}" alt="Activity photo">`;
+      media = `<img class="media" src="${activity.photo_url}" alt="Activity photo" data-media-url="${activity.photo_url}" data-media-video="0">`;
     }
     return `
       <div class="timeline-item">
         <div class="timeline-icon"><ha-icon icon="${icon}"></ha-icon></div>
         <div class="timeline-content">
-          <div class="title">${title}</div>
+          <div class="title truncatable">${title}</div>
           <div class="time">${time}</div>
-          ${description ? `<div class="description">${description}</div>` : ''}
+          ${description ? `<div class="description truncatable">${description}</div>` : ''}
           ${staff}
           ${media}
         </div>
@@ -433,9 +451,10 @@ class ProcareTimelineCard extends HTMLElement {
             display: flex;
             align-items: flex-start;
             gap: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 10px;
             z-index: 1;
           }
+          .timeline-item:last-child { margin-bottom: 0; }
           .timeline-icon {
             flex: 0 0 40px;
             width: 40px;
@@ -451,14 +470,60 @@ class ProcareTimelineCard extends HTMLElement {
           .timeline-content {
             flex: 1;
             min-width: 0;
-            padding-top: 4px;
+            padding-top: 2px;
           }
-          .timeline-content .title { font-weight: 600; font-size: 1.05em; margin-bottom: 2px; }
-          .timeline-content .time { color: var(--secondary-text-color); font-size: 0.85em; margin-bottom: 6px; }
-          .timeline-content .description { color: var(--primary-text-color); }
-          .timeline-content .staff { font-style: italic; color: var(--secondary-text-color); margin-top: 4px; font-size: 0.9em; }
-          .timeline-content img,
-          .timeline-content video { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
+          .timeline-content .title { font-weight: 600; font-size: 1.05em; line-height: 1.25; margin-bottom: 1px; }
+          .timeline-content .time { color: var(--secondary-text-color); font-size: 0.85em; line-height: 1.2; margin-bottom: 2px; }
+          .timeline-content .description { color: var(--primary-text-color); line-height: 1.25; }
+          .timeline-content .staff { font-style: italic; color: var(--secondary-text-color); margin-top: 1px; font-size: 0.9em; line-height: 1.2; }
+          .truncatable {
+            display: -webkit-box;
+            -webkit-line-clamp: 1;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer;
+            word-break: break-word;
+          }
+          .truncatable.expanded {
+            display: block;
+            -webkit-line-clamp: unset;
+            overflow: visible;
+            text-overflow: clip;
+          }
+          .timeline-content .media {
+            max-width: 128px;
+            max-height: 128px;
+            width: auto;
+            height: auto;
+            border-radius: 6px;
+            margin-top: 4px;
+            display: block;
+            cursor: pointer;
+            object-fit: contain;
+          }
+          .modal-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: none;
+            align-items: center; justify-content: center;
+            z-index: 9999;
+          }
+          .modal-overlay.open { display: flex; }
+          .modal-body { max-width: 95vw; max-height: 95vh; display: flex; align-items: center; justify-content: center; }
+          .modal-body img, .modal-body video {
+            max-width: 95vw; max-height: 95vh;
+            object-fit: contain;
+            border-radius: 4px;
+          }
+          .modal-close {
+            position: fixed; top: 12px; right: 16px;
+            color: white; background: rgba(0,0,0,0.4);
+            border: none; width: 40px; height: 40px;
+            border-radius: 50%; font-size: 24px; line-height: 1;
+            cursor: pointer; display: flex;
+            align-items: center; justify-content: center;
+          }
           .day-header {
             font-weight: 600;
             font-size: 1.05em;
@@ -523,7 +588,21 @@ class ProcareTimelineCard extends HTMLElement {
         <ha-card header="${cardTitle}">
           <div id="timeline-container"></div>
         </ha-card>
+        <div id="media-modal" class="modal-overlay" role="dialog" aria-modal="true">
+          <button class="modal-close" id="media-modal-close" aria-label="Close">&times;</button>
+          <div class="modal-body" id="media-modal-body"></div>
+        </div>
       `;
+
+      const modal = this.shadowRoot.getElementById('media-modal');
+      const closeBtn = this.shadowRoot.getElementById('media-modal-close');
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) this.closeMediaModal();
+      });
+      closeBtn.addEventListener('click', () => this.closeMediaModal());
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') this.closeMediaModal();
+      });
     }
 
     const container = this.shadowRoot.getElementById('timeline-container');
@@ -580,6 +659,18 @@ class ProcareTimelineCard extends HTMLElement {
     }
 
     container.innerHTML = timelineHtml;
+
+    container.querySelectorAll('.truncatable').forEach(el => {
+      el.addEventListener('click', () => el.classList.toggle('expanded'));
+    });
+    container.querySelectorAll('.media').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const url = el.getAttribute('data-media-url');
+        const isVideo = el.getAttribute('data-media-video') === '1';
+        this.openMediaModal(url, isVideo);
+      });
+    });
 
     if (this._config.paginate_by_day) {
       container.querySelectorAll('.nav-btn').forEach(btn => {
