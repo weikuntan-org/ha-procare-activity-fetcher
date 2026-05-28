@@ -272,6 +272,8 @@ class ProcareTimelineCard extends HTMLElement {
     if (title.includes('signed in')) return 'mdi:login';
     if (title.includes('signed out')) return 'mdi:logout';
     if (title.includes('note')) return 'mdi:note-text-outline';
+    if (title.includes('video')) return 'mdi:video';
+    if (title.includes('photo')) return 'mdi:camera';
     return 'mdi:child-toy';
   }
 
@@ -318,7 +320,8 @@ class ProcareTimelineCard extends HTMLElement {
           .timeline-content .time { color: var(--secondary-text-color); font-size: 0.9em; margin-bottom: 8px; }
           .timeline-content .description { color: var(--primary-text-color); }
           .timeline-content .staff { font-style: italic; color: var(--secondary-text-color); margin-top: 4px; }
-          .timeline-content img { max-width: 100%; border-radius: 8px; margin-top: 8px; }
+          .timeline-content img,
+          .timeline-content video { max-width: 100%; border-radius: 8px; margin-top: 8px; }
           .no-activities { padding: 16px; }
         </style>
         <ha-card header="${cardTitle}">
@@ -341,7 +344,13 @@ class ProcareTimelineCard extends HTMLElement {
       const title = activity.title || 'Activity';
       const description = activity.details || '';
       const staff = activity.staff ? `<div class="staff">by ${activity.staff}</div>` : '';
-      const photo = activity.photo_url ? `<img src="${activity.photo_url}" alt="Activity photo">` : '';
+      let media = '';
+      if (activity.video_url) {
+        const poster = activity.photo_url ? ` poster="${activity.photo_url}"` : '';
+        media = `<video controls playsinline preload="metadata"${poster} src="${activity.video_url}"></video>`;
+      } else if (activity.photo_url) {
+        media = `<img src="${activity.photo_url}" alt="Activity photo">`;
+      }
 
       timelineHtml += `
         <div class="timeline-item">
@@ -351,7 +360,7 @@ class ProcareTimelineCard extends HTMLElement {
             <div class="time">  ${time}</div>
             <div class="description">  ${description}</div>
             ${staff}
-            ${photo}
+            ${media}
           </div>
         </div>
       `;

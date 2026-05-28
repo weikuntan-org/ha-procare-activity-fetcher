@@ -260,9 +260,13 @@ class ProcareApi:
                 title = activity_type.replace("_", " ").title()
                 details = act.get("comment", "") or ""
                 data = act.get("data", {})
+                activiable = act.get("activiable") or {}
+                video_url = None
 
-                if activity_type in ("sign_in", "sign_out"):
-                    activiable = act.get("activiable", {})
+                if activity_type == "video":
+                    if isinstance(activiable, dict):
+                        video_url = activiable.get("video_file_url") or None
+                elif activity_type in ("sign_in", "sign_out"):
                     signed_by = activiable.get(f"signed_{activity_type}_by", "Unknown")
                     title = f"Signed {activity_type.replace('sign_', '').title()}"
                     details = f"By {signed_by}"
@@ -312,6 +316,7 @@ class ProcareApi:
                     "title": title.strip(),
                     "details": details.strip(),
                     "photo_url": act.get("photo_url"),
+                    "video_url": video_url,
                     "staff": act.get("staff_present_name"),
                 })
             except Exception:
