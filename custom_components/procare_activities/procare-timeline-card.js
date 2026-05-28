@@ -326,10 +326,23 @@ class ProcareTimelineCard extends HTMLElement {
   }
 
   summarize(activities) {
-    const s = { wet: 0, bm: 0, sleep_minutes: 0, meal_count: 0, bottle_count: 0, bottle_oz_total: 0 };
+    const s = {
+      wet: 0, bm: 0, sleep_minutes: 0,
+      meal_count: 0, bottle_count: 0, bottle_oz_total: 0,
+      daycare_minutes: 0, daycare_ongoing: false,
+    };
+    let signedInTs = null;
+    let signedOutTs = null;
     for (const a of activities) {
       const title = a.title || '';
       const t = title.toLowerCase();
+      if (t.includes('signed in')) {
+        const ts = new Date(a.timestamp).getTime();
+        if (isFinite(ts) && (signedInTs === null || ts < signedInTs)) signedInTs = ts;
+      } else if (t.includes('signed out')) {
+        const ts = new Date(a.timestamp).getTime();
+        if (isFinite(ts) && (signedOutTs === null || ts > signedOutTs)) signedOutTs = ts;
+      }
       if (t.startsWith('diaper:')) {
         const rest = t.slice('diaper:'.length);
         if (/\bwet\b/.test(rest)) s.wet += 1;
@@ -353,11 +366,31 @@ class ProcareTimelineCard extends HTMLElement {
         if (m) s.bottle_oz_total += parseFloat(m[1]);
       }
     }
+    if (signedInTs !== null) {
+      let endTs = signedOutTs;
+      if (endTs === null) {
+        const sameDayAsToday = new Date(signedInTs).toDateString() === new Date().toDateString();
+        if (sameDayAsToday) {
+          endTs = Date.now();
+          s.daycare_ongoing = true;
+        }
+      }
+      if (endTs !== null && endTs > signedInTs) {
+        s.daycare_minutes = Math.round((endTs - signedInTs) / 60000);
+      }
+    }
     return s;
   }
 
   chipsHtml(s) {
     const chips = [];
+    if (s.daycare_minutes) {
+      const h = Math.floor(s.daycare_minutes / 60);
+      const m = s.daycare_minutes % 60;
+      const txt = h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+      const suffix = s.daycare_ongoing ? ' so far' : '';
+      chips.push(`<span class="chip"><ha-icon icon="mdi:clock-outline"></ha-icon>${txt} at daycare${suffix}</span>`);
+    }
     if (s.wet) chips.push(`<span class="chip"><ha-icon icon="mdi:water"></ha-icon>${s.wet} wet</span>`);
     if (s.bm) chips.push(`<span class="chip"><ha-icon icon="mdi:emoticon-poop-outline"></ha-icon>${s.bm} BM</span>`);
     if (s.sleep_minutes) {
@@ -410,7 +443,12 @@ class ProcareTimelineCard extends HTMLElement {
     let media = '';
     if (activity.video_url) {
       const poster = activity.photo_url ? ` poster="${activity.photo_url}"` : '';
-      media = `<video class="media" muted playsinline preload="metadata"${poster} src="${activity.video_url}" data-media-url="${activity.video_url}" data-media-video="1"></video>`;
+      media = `
+        <div class="media-wrap" data-media-url="${activity.video_url}" data-media-video="1">
+          <video class="media" muted playsinline preload="metadata"${poster} src="${activity.video_url}"></video>
+          <div class="play-overlay"><ha-icon icon="mdi:play-circle"></ha-icon></div>
+        </div>
+      `;
     } else if (activity.photo_url) {
       media = `<img class="media" src="${activity.photo_url}" alt="Activity photo" data-media-url="${activity.photo_url}" data-media-video="0">`;
     }
@@ -434,7 +472,15 @@ class ProcareTimelineCard extends HTMLElement {
     if (!this.shadowRoot.querySelector('ha-card')) {
       this.shadowRoot.innerHTML = `
         <style>
-          ha-card { padding: 16px; }
+          ha-card { padding: 8px 16px 12px; }
+          .card-title {
+            font-size: var(--ha-card-header-font-size, 1.5em);
+            font-weight: 400;
+            color: var(--ha-card-header-color, var(--primary-text-color));
+            line-height: 1.2;
+            margin: 0 0 8px 0;
+            padding: 0;
+          }
           .timeline { position: relative; }
           .timeline::before {
             content: '';
@@ -501,6 +547,29 @@ class ProcareTimelineCard extends HTMLElement {
             display: block;
             cursor: pointer;
             object-fit: contain;
+          }
+          .media-wrap {
+            position: relative;
+            display: inline-block;
+            margin-top: 4px;
+            cursor: pointer;
+            line-height: 0;
+          }
+          .media-wrap .media { margin-top: 0; }
+          .play-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            color: white;
+            --mdc-icon-size: 44px;
+          }
+          .play-overlay ha-icon {
+            background: rgba(0, 0, 0, 0.45);
+            border-radius: 50%;
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));
           }
           .modal-overlay {
             position: fixed; inset: 0;
@@ -585,7 +654,8 @@ class ProcareTimelineCard extends HTMLElement {
           .chip ha-icon { --mdc-icon-size: 16px; color: var(--primary-color); }
           .no-activities { padding: 16px; }
         </style>
-        <ha-card header="${cardTitle}">
+        <ha-card>
+          <div class="card-title">${cardTitle}</div>
           <div id="timeline-container"></div>
         </ha-card>
         <div id="media-modal" class="modal-overlay" role="dialog" aria-modal="true">
@@ -663,7 +733,7 @@ class ProcareTimelineCard extends HTMLElement {
     container.querySelectorAll('.truncatable').forEach(el => {
       el.addEventListener('click', () => el.classList.toggle('expanded'));
     });
-    container.querySelectorAll('.media').forEach(el => {
+    container.querySelectorAll('[data-media-url]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
         const url = el.getAttribute('data-media-url');
