@@ -1,6 +1,5 @@
 """The Procare Activities integration."""
 import asyncio
-import json
 import logging
 from datetime import time, timedelta
 from pathlib import Path
@@ -31,38 +30,80 @@ from .api import ProcareApi, ProcareApiError, ProcareAuthError
 _LOGGER = logging.getLogger(__name__)
 
 CARD_FILENAME = "procare-timeline-card.js"
-CARD_URL_PATH = f"/{DOMAIN}/{CARD_FILENAME}"
+FRONTEND_URL = f"/{DOMAIN}_static"
 CARD_REGISTERED_KEY = f"{DOMAIN}_card_registered"
 
 
+async def _ensure_lovelace_resource(hass: HomeAssistant, bundle_url: str) -> bool:
+    """Create or update a Storage-mode Lovelace Resource for the card.
+
+    Returns True if a resource is in place; the caller should then skip
+    add_extra_js_url to avoid double-loading. Returns False on YAML-mode
+    dashboards or when the Lovelace API is unavailable.
+    """
+    base = bundle_url.split("?", 1)[0]
+    lovelace = hass.data.get("lovelace")
+    if lovelace is None:
+        return False
+    resources = getattr(lovelace, "resources", None)
+    if resources is None and isinstance(lovelace, dict):
+        resources = lovelace.get("resources")
+    if resources is None:
+        return False
+    if not hasattr(resources, "async_create_item") or not hasattr(resources, "async_update_item"):
+        return False
+    try:
+        if hasattr(resources, "async_load"):
+            await resources.async_load()
+        items = list(resources.async_items())
+    except Exception:
+        _LOGGER.debug("Lovelace resources unavailable; falling back to add_extra_js_url")
+        return False
+
+    existing = next(
+        (item for item in items if str(item.get("url", "")).split("?", 1)[0] == base),
+        None,
+    )
+    payload = {"url": bundle_url, "res_type": "module"}
+    try:
+        if existing is None:
+            await resources.async_create_item(payload)
+            _LOGGER.info("Registered Lovelace resource %s", bundle_url)
+        elif existing.get("url") != bundle_url:
+            await resources.async_update_item(existing["id"], payload)
+            _LOGGER.info("Updated Lovelace resource to %s", bundle_url)
+        return True
+    except Exception:
+        _LOGGER.exception("Failed to manage Lovelace resource")
+        return False
+
+
 async def _register_timeline_card(hass: HomeAssistant) -> None:
-    """Serve the Lovelace card from the integration and inject it on every page."""
+    """Serve the Lovelace card from the integration directory and register it."""
     if hass.data.get(CARD_REGISTERED_KEY):
         return
     hass.data[CARD_REGISTERED_KEY] = True
 
-    card_path = Path(__file__).parent / CARD_FILENAME
+    frontend_dir = Path(__file__).parent
+    card_path = frontend_dir / CARD_FILENAME
     if not card_path.is_file():
         _LOGGER.warning("Timeline card file missing at %s; skipping auto-registration", card_path)
         return
 
     try:
-        manifest = json.loads((Path(__file__).parent / "manifest.json").read_text())
-        version = manifest.get("version", "0")
-    except Exception:
-        version = "0"
-
-    try:
         from homeassistant.components.http import StaticPathConfig
         await hass.http.async_register_static_paths([
-            StaticPathConfig(CARD_URL_PATH, str(card_path), False)
+            StaticPathConfig(FRONTEND_URL, str(frontend_dir), False)
         ])
     except ImportError:
-        # Older HA cores: synchronous API.
-        hass.http.register_static_path(CARD_URL_PATH, str(card_path), False)
+        hass.http.register_static_path(FRONTEND_URL, str(frontend_dir), False)
 
-    add_extra_js_url(hass, f"{CARD_URL_PATH}?v={version}")
-    _LOGGER.info("Procare timeline card auto-registered at %s", CARD_URL_PATH)
+    cache_bust = int(card_path.stat().st_mtime)
+    bundle_url = f"{FRONTEND_URL}/{CARD_FILENAME}?v={cache_bust}"
+
+    if not await _ensure_lovelace_resource(hass, bundle_url):
+        add_extra_js_url(hass, bundle_url)
+    _LOGGER.info("Procare timeline card auto-registered at %s", bundle_url)
 
 
 def _opt(entry: ConfigEntry, key: str, default):
